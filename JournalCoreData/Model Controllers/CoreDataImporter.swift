@@ -11,23 +11,25 @@ import CoreData
 
 class CoreDataImporter {
     init(context: NSManagedObjectContext) {
-        self.context = context
+        self.context = context   //newBackgroundContext()
     }
     
     func sync(entries: [EntryRepresentation], completion: @escaping (Error?) -> Void = { _ in }) {
         
-        self.context.perform {
-            for entryRep in entries {
-                guard let identifier = entryRep.identifier else { continue }
-                
-                let entry = self.fetchSingleEntryFromPersistentStore(with: identifier, in: self.context)
-                if let entry = entry, entry != entryRep {
-                    self.update(entry: entry, with: entryRep)
-                } else if entry == nil {
-                    _ = Entry(entryRepresentation: entryRep, context: self.context)
-                }
-            }
+        //why is this so slow??
+        self.context.performAndWait {
+            print("syncing starts : \(self.checkCurrentTime(for: Date()))")
+                //guard let identifier = entryRep.identifier else { continue }
+                    let entriesFromCoreData = self.fetchEntriesFromPersistentStore(with: entries, in: self.context)
+                    for entryRep in entries {
+                        if let entry = entryDictionary[entryRep.identifier!], entry != entryRep {
+                            self.update(entry: entry, with: entryRep)
+                        } else {
+                            _ = Entry(entryRepresentation: entryRep, context: self.context)
+                        }
+                    }
             completion(nil)
+            print("syncing ends : \(self.checkCurrentTime(for: Date()))")
         }
     }
     
@@ -39,21 +41,43 @@ class CoreDataImporter {
         entry.identifier = entryRep.identifier
     }
     
-    private func fetchSingleEntryFromPersistentStore(with identifier: String?, in context: NSManagedObjectContext) -> Entry? {
+    //change it to get one entry based on an array of identifiers through Predicate because you are either creating or updaing
+     func fetchEntriesFromPersistentStore(with entries: [EntryRepresentation], in context: NSManagedObjectContext) -> [Entry]? {
         
-        guard let identifier = identifier else { return nil }
+        var identifiers: [String] = []
+        identifiers = entries.map {$0.identifier!}
         
+        //to make the performance better for syncing, change NSPredicate to have an array instead of having to check one by one
         let fetchRequest: NSFetchRequest<Entry> = Entry.fetchRequest()
-        fetchRequest.predicate = NSPredicate(format: "identifier == %@", identifier)
+        fetchRequest.predicate = NSPredicate(format: "identifier IN %@", identifiers) //"identifier IN %@", arrayOfIdentifiers
         
-        var result: Entry? = nil
-        do {
-            result = try context.fetch(fetchRequest).first
-        } catch {
-            NSLog("Error fetching single entry: \(error)")
+        var entries: [Entry]?
+        self.context.performAndWait {
+            do {
+                entries = try context.fetch(fetchRequest)
+            } catch {
+                NSLog("Error fetching single entry: \(error)")
+            }
         }
-        return result
+        
+        //cache dictionary
+        
+        for entry in entries! {
+            self.entryDictionary[entry.identifier!] = entry
+        }
+        return entries
     }
     
+    var entryDictionary = [String : Entry]()
+    
     let context: NSManagedObjectContext
+    
+    private func checkCurrentTime(for currentTime : Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MM-dd-yyyy HH:mm:ss"
+        formatter.timeZone = TimeZone(abbreviation: "PST")
+        return formatter.string(from: currentTime)
+    }
 }
+//dictionary is not needed
+//looping through firebase elemenets
